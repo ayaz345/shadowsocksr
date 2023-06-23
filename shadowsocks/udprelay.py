@@ -252,21 +252,20 @@ class AddressMap(object):
         return self._queue
 
     def get(self):
-        if self._queue:
-            while True:
-                if len(self._queue) == 1:
-                    return self._queue[0]
-                index = random.randint(0, len(self._queue) - 1)
-                addr = self._queue[index]
-                if self._addr_map[addr].is_timeout():
-                    self._queue[index] = self._queue[len(self._queue) - 1]
-                    del self._queue[len(self._queue) - 1]
-                    del self._addr_map[addr]
-                else:
-                    break
-            return addr
-        else:
+        if not self._queue:
             return None
+        while True:
+            if len(self._queue) == 1:
+                return self._queue[0]
+            index = random.randint(0, len(self._queue) - 1)
+            addr = self._queue[index]
+            if self._addr_map[addr].is_timeout():
+                self._queue[index] = self._queue[len(self._queue) - 1]
+                del self._queue[len(self._queue) - 1]
+                del self._addr_map[addr]
+            else:
+                break
+        return addr
 
 class TCPRelayHandler(object):
     def __init__(self, server, reqid_to_handlers, fd_to_handlers, loop,
@@ -306,7 +305,9 @@ class TCPRelayHandler(object):
         #loop.add(local_sock, eventloop.POLL_IN | eventloop.POLL_ERR)
         self.last_activity = 0
         self._update_activity()
-        self._random_mtu_size = [random.randint(POST_MTU_MIN, POST_MTU_MAX) for i in range(1024)]
+        self._random_mtu_size = [
+            random.randint(POST_MTU_MIN, POST_MTU_MAX) for _ in range(1024)
+        ]
         self._random_mtu_index = 0
 
         self._rand_data = b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10" * 4
@@ -381,10 +382,11 @@ class TCPRelayHandler(object):
             except (OSError, IOError) as e:
                 error_no = eventloop.errno_from_exception(e)
                 uncomplete = True
-                if error_no in (errno.EAGAIN, errno.EINPROGRESS,
-                                errno.EWOULDBLOCK):
-                    pass
-                else:
+                if error_no not in (
+                    errno.EAGAIN,
+                    errno.EINPROGRESS,
+                    errno.EWOULDBLOCK,
+                ):
                     #traceback.print_exc()
                     shell.print_exception(e)
                     self.destroy()
@@ -415,16 +417,15 @@ class TCPRelayHandler(object):
                 self._update_stream(STREAM_UP, WAIT_STATUS_WRITING)
             else:
                 logging.error('write_all_to_sock:unknown socket')
-        else:
-            if sock == self._local_sock:
-                if self._sendingqueue.size() > SENDING_WINDOW_SIZE:
-                    self._update_stream(STREAM_DOWN, WAIT_STATUS_WRITING)
-                else:
-                    self._update_stream(STREAM_DOWN, WAIT_STATUS_READING)
-            elif sock == self._remote_sock:
-                self._update_stream(STREAM_UP, WAIT_STATUS_READING)
+        elif sock == self._local_sock:
+            if self._sendingqueue.size() > SENDING_WINDOW_SIZE:
+                self._update_stream(STREAM_DOWN, WAIT_STATUS_WRITING)
             else:
-                logging.error('write_all_to_sock:unknown socket')
+                self._update_stream(STREAM_DOWN, WAIT_STATUS_READING)
+        elif sock == self._remote_sock:
+            self._update_stream(STREAM_UP, WAIT_STATUS_READING)
+        else:
+            logging.error('write_all_to_sock:unknown socket')
         return True
 
     def _create_remote_socket(self, ip, port):
@@ -434,8 +435,7 @@ class TCPRelayHandler(object):
         af, socktype, proto, canonname, sa = addrs[0]
         if self._forbidden_iplist:
             if common.to_str(sa[0]) in self._forbidden_iplist:
-                raise Exception('IP %s is in forbidden list, reject' %
-                                common.to_str(sa[0]))
+                raise Exception(f'IP {common.to_str(sa[0])} is in forbidden list, reject')
         remote_sock = socket.socket(af, socktype, proto)
         self._remote_sock = remote_sock
 
@@ -451,9 +451,7 @@ class TCPRelayHandler(object):
             self.destroy()
             return
         if result:
-            ip = result[1]
-            if ip:
-
+            if ip := result[1]:
                 try:
                     self._stage = STAGE_CONNECTING
                     remote_addr = ip
@@ -465,10 +463,10 @@ class TCPRelayHandler(object):
                     try:
                         remote_sock.connect((remote_addr, remote_port))
                     except (OSError, IOError) as e:
-                        if eventloop.errno_from_exception(e) in (errno.EINPROGRESS,
-                                errno.EWOULDBLOCK):
-                            pass # always goto here
-                        else:
+                        if eventloop.errno_from_exception(e) not in (
+                            errno.EINPROGRESS,
+                            errno.EWOULDBLOCK,
+                        ):
                             raise e
 
                     self._loop.add(remote_sock,
@@ -480,7 +478,7 @@ class TCPRelayHandler(object):
 
                     addr = self.get_local_address()
 
-                    for i in range(2):
+                    for _ in range(2):
                         rsp_data = self._pack_rsp_data(CMD_RSP_CONNECT_REMOTE, RSP_STATE_CONNECTEDREMOTE)
                         self._write_to_sock(rsp_data, self._local_sock, addr)
 
@@ -502,12 +500,10 @@ class TCPRelayHandler(object):
             data = self._local_sock.recv(BUF_SIZE)
         except (OSError, IOError) as e:
             if eventloop.errno_from_exception(e) in \
-                    (errno.ETIMEDOUT, errno.EAGAIN, errno.EWOULDBLOCK):
+                        (errno.ETIMEDOUT, errno.EAGAIN, errno.EWOULDBLOCK):
                 return
         if not data:
             self.destroy()
-            return
-        if not data:
             return
         self._server.server_transfer_ul += len(data)
         #TODO ============================================================
@@ -607,20 +603,38 @@ class TCPRelayHandler(object):
     def _pack_post_data(self, cmd, pack_id, data):
         reqid_str = struct.pack(">H", self._request_id)
         recv_id = self._recvqueue.get_begin_id()
-        rsp_data = b''.join([CMD_VER_STR, common.chr(cmd), reqid_str, struct.pack(">I", recv_id), struct.pack(">I", pack_id), data, reqid_str])
-        return rsp_data
+        return b''.join(
+            [
+                CMD_VER_STR,
+                common.chr(cmd),
+                reqid_str,
+                struct.pack(">I", recv_id),
+                struct.pack(">I", pack_id),
+                data,
+                reqid_str,
+            ]
+        )
 
     def _pack_post_data_64(self, cmd, send_id, pack_id, data):
         reqid_str = struct.pack(">H", self._request_id)
         recv_id = self._recvqueue.get_begin_id()
-        rsp_data = b''.join([CMD_VER_STR, common.chr(cmd), reqid_str, struct.pack(">Q", recv_id), struct.pack(">Q", pack_id), data, reqid_str])
-        return rsp_data
+        return b''.join(
+            [
+                CMD_VER_STR,
+                common.chr(cmd),
+                reqid_str,
+                struct.pack(">Q", recv_id),
+                struct.pack(">Q", pack_id),
+                data,
+                reqid_str,
+            ]
+        )
 
     def sweep_timeout(self):
         logging.info("sweep_timeout")
         if self._stage == STAGE_STREAM:
             pack_id, missing = self._recvqueue.get_missing_id(0)
-            logging.info("sweep_timeout %s %s" % (pack_id, missing))
+            logging.info(f"sweep_timeout {pack_id} {missing}")
             data = b''
             for pid in missing:
                 data += struct.pack(">H", pid)
@@ -631,7 +645,7 @@ class TCPRelayHandler(object):
     def handle_stream_sync_status(self, addr, cmd, request_id, pack_id, max_send_id, data):
         missing_list = []
         while len(data) >= 2:
-            pid = struct.unpack(">H", data[0:2])[0]
+            pid = struct.unpack(">H", data[:2])[0]
             data = data[2:]
             missing_list.append(pid)
         done_list = []
@@ -678,11 +692,11 @@ class TCPRelayHandler(object):
 
         if self._stage == STAGE_RSP_ID:
             if cmd == CMD_CONNECT:
-                for i in range(2):
+                for _ in range(2):
                     rsp_data = self._pack_rsp_data(CMD_RSP_CONNECT, RSP_STATE_CONNECTED)
                     self._write_to_sock(rsp_data, self._local_sock, addr)
             elif cmd == CMD_CONNECT_REMOTE:
-                local_id = data[0:4]
+                local_id = data[:4]
                 if self._local_id == local_id:
                     data = data[4:]
                     header_result = parse_header(data)
@@ -700,9 +714,9 @@ class TCPRelayHandler(object):
                     self._write_to_sock(rsp_data, self._local_sock, addr)
         elif self._stage == STAGE_CONNECTING:
             if cmd == CMD_CONNECT_REMOTE:
-                local_id = data[0:4]
+                local_id = data[:4]
                 if self._local_id == local_id:
-                    for i in range(2):
+                    for _ in range(2):
                         rsp_data = self._pack_rsp_data(CMD_RSP_CONNECT_REMOTE, RSP_STATE_CONNECTEDREMOTE)
                         self._write_to_sock(rsp_data, self._local_sock, addr)
                 else:
@@ -715,7 +729,7 @@ class TCPRelayHandler(object):
                 rsp_data = self._pack_rsp_data(CMD_DISCONNECT, RSP_STATE_EMPTY)
                 self._write_to_sock(rsp_data, self._local_sock, addr)
                 return
-            local_id = data[0:4]
+            local_id = data[:4]
             if self._local_id != local_id:
                 # ileagal request
                 rsp_data = self._pack_rsp_data(CMD_DISCONNECT, RSP_STATE_EMPTY)
@@ -727,12 +741,12 @@ class TCPRelayHandler(object):
                 rsp_data = self._pack_rsp_data(CMD_RSP_CONNECT_REMOTE, RSP_STATE_CONNECTEDREMOTE)
                 self._write_to_sock(rsp_data, self._local_sock, addr)
             elif cmd == CMD_POST:
-                recv_id = struct.unpack(">I", data[0:4])[0]
+                recv_id = struct.unpack(">I", data[:4])[0]
                 pack_id = struct.unpack(">I", data[4:8])[0]
                 self._recvqueue.insert(pack_id, data[8:])
                 self._sendingqueue.set_finish(recv_id, [])
             elif cmd == CMD_POST_64:
-                recv_id = struct.unpack(">Q", data[0:8])[0]
+                recv_id = struct.unpack(">Q", data[:8])[0]
                 pack_id = struct.unpack(">Q", data[8:16])[0]
                 self._recvqueue.insert(pack_id, data[16:])
                 self._sendingqueue.set_finish(recv_id, [])
@@ -743,12 +757,12 @@ class TCPRelayHandler(object):
                 self.destroy_local()
                 return
             elif cmd == CMD_SYN_STATUS:
-                pack_id = struct.unpack(">I", data[0:4])[0]
+                pack_id = struct.unpack(">I", data[:4])[0]
                 max_send_id = struct.unpack(">I", data[4:8])[0]
                 data = data[8:]
                 self.handle_stream_sync_status(addr, cmd, request_id, pack_id, max_send_id, data)
             elif cmd == CMD_SYN_STATUS_64:
-                pack_id = struct.unpack(">Q", data[0:8])[0]
+                pack_id = struct.unpack(">Q", data[:8])[0]
                 max_send_id = struct.unpack(">Q", data[8:16])[0]
                 data = data[16:]
                 self.handle_stream_sync_status(addr, cmd, request_id, pack_id, max_send_id, data)
@@ -756,7 +770,7 @@ class TCPRelayHandler(object):
                 pack_id, post_data = self._recvqueue.get_data()
                 self._write_to_sock(post_data, self._remote_sock)
         elif self._stage == STAGE_DESTROYED:
-            local_id = data[0:4]
+            local_id = data[:4]
             if self._local_id != local_id:
                 # ileagal request
                 rsp_data = self._pack_rsp_data(CMD_DISCONNECT, RSP_STATE_EMPTY)
@@ -765,12 +779,12 @@ class TCPRelayHandler(object):
             else:
                 data = data[4:]
             if cmd == CMD_SYN_STATUS:
-                pack_id = struct.unpack(">I", data[0:4])[0]
+                pack_id = struct.unpack(">I", data[:4])[0]
                 max_send_id = struct.unpack(">I", data[4:8])[0]
                 data = data[8:]
                 self.handle_stream_sync_status(addr, cmd, request_id, pack_id, max_send_id, data)
             elif cmd == CMD_SYN_STATUS_64:
-                pack_id = struct.unpack(">Q", data[0:8])[0]
+                pack_id = struct.unpack(">Q", data[:8])[0]
                 max_send_id = struct.unpack(">Q", data[8:16])[0]
                 data = data[16:]
                 self.handle_stream_sync_status(addr, cmd, request_id, pack_id, max_send_id, data)
@@ -807,8 +821,9 @@ class TCPRelayHandler(object):
             logging.warn('unknown socket')
 
     def _log_error(self, e):
-        logging.error('%s when handling connection from %s' %
-                      (e, self._client_address.keys()))
+        logging.error(
+            f'{e} when handling connection from {self._client_address.keys()}'
+        )
 
     def destroy(self):
         # destroy the handler and release any resources
@@ -934,9 +949,6 @@ class UDPRelay(object):
             self._sockets.remove(client.fileno())
             self._eventloop.remove(client)
             client.close()
-        else:
-            # just an address
-            pass
 
     def _pre_parse_udp_header(self, data):
         if data is None:

@@ -240,10 +240,9 @@ class TCPRelayHandler(object):
                     if header_result is None:
                         continue
                     connecttype, dest_addr, dest_port, header_length = header_result
-                    addrs = socket.getaddrinfo(dest_addr, dest_port, 0,
-                            socket.SOCK_DGRAM, socket.SOL_UDP)
-                    #logging.info('UDP over TCP sendto %s:%d %d bytes from %s:%d' % (dest_addr, dest_port, len(data), self._client_address[0], self._client_address[1]))
-                    if addrs:
+                    if addrs := socket.getaddrinfo(
+                        dest_addr, dest_port, 0, socket.SOCK_DGRAM, socket.SOL_UDP
+                    ):
                         af, socktype, proto, canonname, server_addr = addrs[0]
                         data = data[header_length:]
                         if af == socket.AF_INET6:
@@ -265,20 +264,17 @@ class TCPRelayHandler(object):
             return True
         else:
             try:
-                if self._is_local:
-                    pass
-                else:
-                    if sock == self._local_sock and self._encrypt_correct:
+                if sock == self._local_sock and self._encrypt_correct:
+                    if not self._is_local:
                         obfs_encode = self._obfs.server_encode(data)
                         data = obfs_encode
-                if data:
-                    l = len(data)
-                    s = sock.send(data)
-                    if s < l:
-                        data = data[s:]
-                        uncomplete = True
-                else:
+                if not data:
                     return
+                l = len(data)
+                s = sock.send(data)
+                if s < l:
+                    data = data[s:]
+                    uncomplete = True
             except (OSError, IOError) as e:
                 error_no = eventloop.errno_from_exception(e)
                 if error_no in (errno.EAGAIN, errno.EINPROGRESS,
@@ -302,13 +298,12 @@ class TCPRelayHandler(object):
                 self._update_stream(STREAM_UP, WAIT_STATUS_WRITING)
             else:
                 logging.error('write_all_to_sock:unknown socket')
+        elif sock == self._local_sock:
+            self._update_stream(STREAM_DOWN, WAIT_STATUS_READING)
+        elif sock == self._remote_sock:
+            self._update_stream(STREAM_UP, WAIT_STATUS_READING)
         else:
-            if sock == self._local_sock:
-                self._update_stream(STREAM_DOWN, WAIT_STATUS_READING)
-            elif sock == self._remote_sock:
-                self._update_stream(STREAM_UP, WAIT_STATUS_READING)
-            else:
-                logging.error('write_all_to_sock:unknown socket')
+            logging.error('write_all_to_sock:unknown socket')
         return True
 
     def _get_redirect_host(self, client_address, ogn_data):
@@ -320,10 +315,7 @@ class TCPRelayHandler(object):
         address_bytes = common.inet_pton(af, sa[0])
         if len(address_bytes) == 16:
             addr = struct.unpack('>Q', address_bytes[8:])[0]
-        if len(address_bytes) == 4:
-            addr = struct.unpack('>I', address_bytes)[0]
-        else:
-            addr = 0
+        addr = struct.unpack('>I', address_bytes)[0] if len(address_bytes) == 4 else 0
         return host_list[((hash_code & 0xffffffff) + addr + 3) % len(host_list)]
 
     def _handel_protocol_error(self, client_address, ogn_data):
@@ -438,8 +430,7 @@ class TCPRelayHandler(object):
                     data += struct.pack('<I', crc)
                 data = self._protocol.client_pre_encrypt(data)
                 data_to_send = self._encryptor.encrypt(data)
-                data_to_send = self._obfs.client_encode(data_to_send)
-                if data_to_send:
+                if data_to_send := self._obfs.client_encode(data_to_send):
                     self._data_to_write_to_remote.append(data_to_send)
                 # notice here may go into _handle_dns_resolved directly
                 self._dns_resolver.resolve(self._chosen_server[0],
@@ -467,8 +458,7 @@ class TCPRelayHandler(object):
         af, socktype, proto, canonname, sa = addrs[0]
         if self._forbidden_iplist:
             if common.to_str(sa[0]) in self._forbidden_iplist:
-                raise Exception('IP %s is in forbidden list, reject' %
-                                common.to_str(sa[0]))
+                raise Exception(f'IP {common.to_str(sa[0])} is in forbidden list, reject')
         remote_sock = socket.socket(af, socktype, proto)
         self._remote_sock = remote_sock
         self._fd_to_handlers[remote_sock.fileno()] = self
@@ -496,9 +486,7 @@ class TCPRelayHandler(object):
             self.destroy()
             return
         if result:
-            ip = result[1]
-            if ip:
-
+            if ip := result[1]:
                 try:
                     self._stage = STAGE_CONNECTING
                     remote_addr = ip
@@ -531,10 +519,10 @@ class TCPRelayHandler(object):
                             try:
                                 remote_sock.connect((remote_addr, remote_port))
                             except (OSError, IOError) as e:
-                                if eventloop.errno_from_exception(e) in (errno.EINPROGRESS,
-                                        errno.EWOULDBLOCK):
-                                    pass # always goto here
-                                else:
+                                if eventloop.errno_from_exception(e) not in (
+                                    errno.EINPROGRESS,
+                                    errno.EWOULDBLOCK,
+                                ):
                                     raise e
                             self._loop.add(remote_sock,
                                        eventloop.POLL_ERR | eventloop.POLL_OUT,
@@ -629,7 +617,7 @@ class TCPRelayHandler(object):
                 data = self._remote_sock.recv(BUF_SIZE)
         except (OSError, IOError) as e:
             if eventloop.errno_from_exception(e) in \
-                    (errno.ETIMEDOUT, errno.EAGAIN, errno.EWOULDBLOCK, 10035): #errno.WSAEWOULDBLOCK
+                        (errno.ETIMEDOUT, errno.EAGAIN, errno.EWOULDBLOCK, 10035): #errno.WSAEWOULDBLOCK
                 return
         if not data:
             self.destroy()
@@ -643,10 +631,9 @@ class TCPRelayHandler(object):
                 self._write_to_sock(send_back, self._remote_sock)
             data = self._encryptor.decrypt(obfs_decode[0])
             data = self._protocol.client_post_decrypt(data)
-        else:
-            if self._encrypt_correct:
-                data = self._protocol.server_pre_encrypt(data)
-                data = self._encryptor.encrypt(data)
+        elif self._encrypt_correct:
+            data = self._protocol.server_pre_encrypt(data)
+            data = self._encryptor.encrypt(data)
         try:
             self._write_to_sock(data, self._local_sock)
         except Exception as e:
@@ -693,7 +680,7 @@ class TCPRelayHandler(object):
             logging.debug('ignore handle_event: destroyed')
             return
         # order is important
-        if sock == self._remote_sock or sock == self._remote_sock_v6:
+        if sock in [self._remote_sock, self._remote_sock_v6]:
             if event & eventloop.POLL_ERR:
                 self._on_remote_error()
                 if self._stage == STAGE_DESTROYED:
@@ -865,35 +852,32 @@ class TCPRelay(object):
         # tornado's timeout memory management is more flexible than we need
         # we just need a sorted last_activity queue and it's faster than heapq
         # in fact we can do O(1) insertion/remove so we invent our own
-        if self._timeouts:
-            logging.log(shell.VERBOSE_LEVEL, 'sweeping timeouts')
-            now = time.time()
-            length = len(self._timeouts)
-            pos = self._timeout_offset
-            while pos < length:
-                handler = self._timeouts[pos]
-                if handler:
-                    if now - handler.last_activity < self._timeout:
-                        break
-                    else:
-                        if handler.remote_address:
-                            logging.warn('timed out: %s:%d' %
-                                         handler.remote_address)
-                        else:
-                            logging.warn('timed out')
-                        handler.destroy()
-                        self._timeouts[pos] = None  # free memory
-                        pos += 1
+        if not self._timeouts:
+            return
+        logging.log(shell.VERBOSE_LEVEL, 'sweeping timeouts')
+        now = time.time()
+        length = len(self._timeouts)
+        pos = self._timeout_offset
+        while pos < length:
+            if handler := self._timeouts[pos]:
+                if now - handler.last_activity < self._timeout:
+                    break
+                if handler.remote_address:
+                    logging.warn('timed out: %s:%d' %
+                                 handler.remote_address)
                 else:
-                    pos += 1
-            if pos > TIMEOUTS_CLEAN_SIZE and pos > length >> 1:
-                # clean up the timeout queue when it gets larger than half
-                # of the queue
-                self._timeouts = self._timeouts[pos:]
-                for key in self._handler_to_timeouts:
-                    self._handler_to_timeouts[key] -= pos
-                pos = 0
-            self._timeout_offset = pos
+                    logging.warn('timed out')
+                handler.destroy()
+                self._timeouts[pos] = None  # free memory
+            pos += 1
+        if pos > TIMEOUTS_CLEAN_SIZE and pos > length >> 1:
+            # clean up the timeout queue when it gets larger than half
+            # of the queue
+            self._timeouts = self._timeouts[pos:]
+            for key in self._handler_to_timeouts:
+                self._handler_to_timeouts[key] -= pos
+            pos = 0
+        self._timeout_offset = pos
 
     def handle_event(self, sock, fd, event):
         # handle events and dispatch to handlers
@@ -915,17 +899,14 @@ class TCPRelay(object):
                 if error_no in (errno.EAGAIN, errno.EINPROGRESS,
                                 errno.EWOULDBLOCK):
                     return
-                else:
-                    shell.print_exception(e)
-                    if self._config['verbose']:
-                        traceback.print_exc()
+                shell.print_exception(e)
+                if self._config['verbose']:
+                    traceback.print_exc()
+        elif sock:
+            if handler := self._fd_to_handlers.get(fd, None):
+                handler.handle_event(sock, event)
         else:
-            if sock:
-                handler = self._fd_to_handlers.get(fd, None)
-                if handler:
-                    handler.handle_event(sock, event)
-            else:
-                logging.warn('poll removed fd')
+            logging.warn('poll removed fd')
 
     def handle_periodic(self):
         if self._closed:

@@ -89,9 +89,7 @@ class verify_base(plain.plain):
             return 7
         if ord(buf[0]) == 4:
             return 19
-        if ord(buf[0]) == 3:
-            return 4 + ord(buf[1])
-        return def_value
+        return 4 + ord(buf[1]) if ord(buf[0]) == 3 else def_value
 
 class verify_simple(verify_base):
     def __init__(self, method):
@@ -331,38 +329,34 @@ class obfs_auth_data(object):
             self.client_id[client_id].update()
 
     def insert(self, client_id, connection_id):
-        if client_id not in self.client_id or not self.client_id[client_id].enable:
-            active = 0
-            for c_id in self.client_id:
-                if self.client_id[c_id].is_active():
-                    active += 1
-            if active >= self.max_client:
-                logging.warn('auth_simple: max active clients exceeded')
-                return False
+        if client_id in self.client_id and self.client_id[client_id].enable:
+            return self.client_id[client_id].insert(connection_id)
+        active = sum(1 for c_id in self.client_id if self.client_id[c_id].is_active())
+        if active >= self.max_client:
+            logging.warn('auth_simple: max active clients exceeded')
+            return False
 
-            if len(self.client_id) < self.max_client:
+        if len(self.client_id) < self.max_client:
+            if client_id not in self.client_id:
+                self.client_id[client_id] = client_queue(connection_id)
+            else:
+                self.client_id[client_id].re_enable(connection_id)
+            return self.client_id[client_id].insert(connection_id)
+        keys = self.client_id.keys()
+        random.shuffle(keys)
+        for c_id in keys:
+            if not self.client_id[c_id].is_active() and self.client_id[c_id].enable:
+                if len(self.client_id) >= self.max_buffer:
+                    del self.client_id[c_id]
+                else:
+                    self.client_id[c_id].enable = False
                 if client_id not in self.client_id:
                     self.client_id[client_id] = client_queue(connection_id)
                 else:
                     self.client_id[client_id].re_enable(connection_id)
                 return self.client_id[client_id].insert(connection_id)
-            keys = self.client_id.keys()
-            random.shuffle(keys)
-            for c_id in keys:
-                if not self.client_id[c_id].is_active() and self.client_id[c_id].enable:
-                    if len(self.client_id) >= self.max_buffer:
-                        del self.client_id[c_id]
-                    else:
-                        self.client_id[c_id].enable = False
-                    if client_id not in self.client_id:
-                        self.client_id[client_id] = client_queue(connection_id)
-                    else:
-                        self.client_id[client_id].re_enable(connection_id)
-                    return self.client_id[client_id].insert(connection_id)
-            logging.warn('auth_simple: no inactive client [assert]')
-            return False
-        else:
-            return self.client_id[client_id].insert(connection_id)
+        logging.warn('auth_simple: no inactive client [assert]')
+        return False
 
 class auth_simple(verify_base):
     def __init__(self, method):
@@ -396,7 +390,9 @@ class auth_simple(verify_base):
             self.server_info.data.local_client_id = b''
         if not self.server_info.data.local_client_id:
             self.server_info.data.local_client_id = os.urandom(4)
-            logging.debug("local_client_id %s" % (binascii.hexlify(self.server_info.data.local_client_id),))
+            logging.debug(
+                f"local_client_id {binascii.hexlify(self.server_info.data.local_client_id)}"
+            )
             self.server_info.data.connection_id = struct.unpack('<I', os.urandom(4))[0] & 0xFFFFFF
         self.server_info.data.connection_id += 1
         return b''.join([struct.pack('<I', utc_time),
@@ -468,16 +464,17 @@ class auth_simple(verify_base):
             if length >= 8192:
                 self.raw_trans = True
                 self.recv_buf = b''
-                if self.decrypt_packet_num == 0:
-                    logging.info('auth_simple: over size')
-                    return b'E'
-                else:
+                if self.decrypt_packet_num != 0:
                     raise Exception('server_post_decrype data error')
+                logging.info('auth_simple: over size')
+                return b'E'
             if length > len(self.recv_buf):
                 break
 
             if (binascii.crc32(self.recv_buf[:length]) & 0xffffffff) != 0xffffffff:
-                logging.info('auth_simple: crc32 error, data %s' % (binascii.hexlify(self.recv_buf[:length]),))
+                logging.info(
+                    f'auth_simple: crc32 error, data {binascii.hexlify(self.recv_buf[:length])}'
+                )
                 self.raw_trans = True
                 self.recv_buf = b''
                 if self.decrypt_packet_num == 0:
@@ -498,7 +495,7 @@ class auth_simple(verify_base):
                 connection_id = struct.unpack('<I', out_buf[8:12])[0]
                 time_dif = common.int32((int(time.time()) & 0xffffffff) - utc_time)
                 if time_dif < -self.max_time_dif or time_dif > self.max_time_dif \
-                        or common.int32(utc_time - self.server_info.data.startup_time) < 0:
+                            or common.int32(utc_time - self.server_info.data.startup_time) < 0:
                     self.raw_trans = True
                     self.recv_buf = b''
                     logging.info('auth_simple: wrong timestamp, time_dif %d, data %s' % (time_dif, binascii.hexlify(out_buf),))
@@ -511,7 +508,7 @@ class auth_simple(verify_base):
                 else:
                     self.raw_trans = True
                     self.recv_buf = b''
-                    logging.info('auth_simple: auth fail, data %s' % (binascii.hexlify(out_buf),))
+                    logging.info(f'auth_simple: auth fail, data {binascii.hexlify(out_buf)}')
                     return b'E'
             self.recv_buf = self.recv_buf[length:]
 

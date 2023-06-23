@@ -84,16 +84,13 @@ class http_simple(plain.plain):
     def encode_head(self, buf):
         ret = b''
         for ch in buf:
-            ret += '%' + binascii.hexlify(ch)
+            ret += f'%{binascii.hexlify(ch)}'
         return ret
 
     def client_encode(self, buf):
         if self.has_sent_header:
             return buf
-        if len(buf) > 64:
-            headlen = random.randint(1, 64)
-        else:
-            headlen = len(buf)
+        headlen = random.randint(1, 64) if len(buf) > 64 else len(buf)
         headdata = buf[:headlen]
         buf = buf[headlen:]
         port = b''
@@ -153,19 +150,18 @@ class http_simple(plain.plain):
 
         self.recv_buffer += buf
         buf = self.recv_buffer
-        if len(buf) > 10:
-            if match_begin(buf, b'GET /') or match_begin(buf, b'POST /'):
-                if len(buf) > 65536:
-                    self.recv_buffer = None
-                    logging.warn('http_simple: over size')
-                    return self.not_match_return(buf)
-            else: #not http header, run on original protocol
-                self.recv_buffer = None
-                logging.debug('http_simple: not match begin')
-                return self.not_match_return(buf)
-        else:
+        if len(buf) <= 10:
             return (b'', True, False)
 
+        if match_begin(buf, b'GET /') or match_begin(buf, b'POST /'):
+            if len(buf) > 65536:
+                self.recv_buffer = None
+                logging.warn('http_simple: over size')
+                return self.not_match_return(buf)
+        else: #not http header, run on original protocol
+            self.recv_buffer = None
+            logging.debug('http_simple: not match begin')
+            return self.not_match_return(buf)
         datas = buf.split(b'\r\n\r\n', 1)
         if datas and len(datas) > 1:
             ret_buf = self.get_data_from_http_header(buf)
@@ -173,9 +169,7 @@ class http_simple(plain.plain):
             if len(ret_buf) >= 15:
                 self.has_recv_header = True
                 return (ret_buf, True, False)
-            return (b'', True, False)
-        else:
-            return (b'', True, False)
+        return (b'', True, False)
 
 class http2_simple(plain.plain):
     def __init__(self, method):
@@ -239,15 +233,12 @@ class http2_simple(plain.plain):
 
         self.recv_buffer += buf
         buf = self.recv_buffer
-        if len(buf) > 10:
-            if match_begin(buf, b'GET /'):
-                pass
-            else: #not http header, run on original protocol
-                self.recv_buffer = None
-                return self.not_match_return(buf)
-        else:
+        if len(buf) <= 10:
             return (b'', True, False)
 
+        if not match_begin(buf, b'GET /'):
+            self.recv_buffer = None
+            return self.not_match_return(buf)
         datas = buf.split(b'\r\n\r\n', 1)
         if datas and len(datas) > 1 and len(datas[0]) >= 4:
             lines = buf.split(b'\r\n')
@@ -257,10 +248,7 @@ class http2_simple(plain.plain):
                     ret_buf += datas[1]
                     self.has_recv_header = True
                     return (ret_buf, True, False)
-            return (b'', True, False)
-        else:
-            return (b'', True, False)
-        return self.not_match_return(buf)
+        return (b'', True, False)
 
 class tls_simple(plain.plain):
     def __init__(self, method):
